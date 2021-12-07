@@ -1,0 +1,11 @@
+[package]
+name = "redis-governor"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+governor = { git = "ssh://git@github.com/antifuchs/governor.git", branch = "master" }
+redis = "0.21.0"
+siphasher = "0.3.6"
