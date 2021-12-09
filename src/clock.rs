@@ -9,7 +9,7 @@ use std::rc::Rc;
 ///
 /// Uses `Rc<RefCell<redis::Connection>>` as `Clock` requires that `Clone` be implemented for the type.
 #[derive(Clone)]
-pub struct RedisClock(Rc<RefCell<Connection>>);
+pub struct RedisClock(pub(crate) Rc<RefCell<Connection>>);
 
 impl Clock for RedisClock {
     type Instant = RedisInstant;
@@ -23,6 +23,7 @@ impl Clock for RedisClock {
     }
 }
 
+/// An instance in time as observed by a connected Redis cluster.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct RedisInstant(Nanos);
 

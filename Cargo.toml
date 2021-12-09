@@ -10,9 +10,13 @@ A rate limiter for distributed systems, using Redis as a shared time base and st
 """
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 governor = { git = "ssh://git@github.com/antifuchs/governor.git", branch = "master" }
 redis = "0.21.0"
 siphasher = "0.3.6"
+log = "0.4"
+
+[dev-dependencies]
+log = { version = "0.4", features = ["max_level_trace"] }
+env_logger = "0.9.0"
+test-log = "0.2.8"

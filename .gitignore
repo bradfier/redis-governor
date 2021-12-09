@@ -1,3 +1,8 @@
+<<<<<<< HEAD
 /.idea
 /target
 Cargo.lock
+=======
+Cargo.lock
+target/
+>>>>>>> 23dfd6f (wip: redis state impl)
