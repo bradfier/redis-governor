@@ -22,14 +22,14 @@ pub type RedisNoOpMiddleware = NoOpMiddleware<clock::RedisInstant>;
 /// The [`RedisGovernor`] acts as a factory for [`RateLimiter`](governor::RateLimiter)s
 /// which share a single underlying Redis connection.
 pub struct RedisGovernor<C, K> {
-    clock: clock::RedisClock<C>,
+    _clock: clock::RedisClock<C>,
     state: state::RedisStateStore<C, K>,
 }
 
 impl<C, K> Clone for RedisGovernor<C, K> {
     fn clone(&self) -> Self {
         Self {
-            clock: self.clock.clone(),
+            _clock: self._clock.clone(),
             state: self.state.clone(),
         }
     }
@@ -65,12 +65,22 @@ where
         let state = state::RedisStateStore::new(conn.clone(), prefix);
         let clock = clock::RedisClock(conn);
 
-        Self { clock, state }
+        Self { _clock: clock, state }
     }
 
     /// Wipe all of the rate limits for this governor.
     pub fn wipe(&self) {
         self.state.wipe();
+    }
+
+    /// Get a reference to the stored [`RedisClock`](crate::clock::RedisClock).
+    ///
+    /// Useful to query the current time for displaying rate limiting information.
+    pub fn clock(
+        &self,
+    ) -> &clock::RedisClock<C>
+    {
+        &self._clock
     }
 
     /// Create a new [`RateLimiter`](governor::RateLimiter) with a given [`Quota`](governor::Quota).
@@ -82,6 +92,6 @@ where
         quota: Quota,
     ) -> RateLimiter<K, state::RedisStateStore<C, K>, clock::RedisClock<C>, RedisNoOpMiddleware>
     {
-        RateLimiter::new(quota, self.state.clone(), &self.clock)
+        RateLimiter::new(quota, self.state.clone(), &self._clock)
     }
 }
