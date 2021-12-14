@@ -1,6 +1,5 @@
 use governor::clock::{Clock, Reference};
 use governor::nanos::Nanos;
-use redis::Connection;
 use std::cell::RefCell;
 use std::ops::Add;
 use std::rc::Rc;
@@ -8,10 +7,18 @@ use std::rc::Rc;
 /// Clock source for using Redis as a limiter time base.
 ///
 /// Uses `Rc<RefCell<redis::Connection>>` as `Clock` requires that `Clone` be implemented for the type.
-#[derive(Clone)]
-pub struct RedisClock(pub(crate) Rc<RefCell<Connection>>);
+pub struct RedisClock<C>(pub(crate) Rc<RefCell<C>>);
 
-impl Clock for RedisClock {
+impl<C> Clone for RedisClock<C> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<C> Clock for RedisClock<C>
+where
+    C: redis::ConnectionLike,
+{
     type Instant = RedisInstant;
 
     fn now(&self) -> Self::Instant {

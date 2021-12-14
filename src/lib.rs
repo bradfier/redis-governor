@@ -3,7 +3,7 @@ extern crate log;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -21,16 +21,34 @@ pub type RedisNoOpMiddleware = NoOpMiddleware<clock::RedisInstant>;
 ///
 /// The [`RedisGovernor`] acts as a factory for [`RateLimiter`](governor::RateLimiter)s
 /// which share a single underlying Redis connection.
-pub struct RedisGovernor<K>
-where
-    K: Hash + Eq + Clone + Debug,
-{
-    clock: clock::RedisClock,
-    state: state::RedisStateStore<K>,
+pub struct RedisGovernor<C, K> {
+    clock: clock::RedisClock<C>,
+    state: state::RedisStateStore<C, K>,
 }
 
-impl<K> RedisGovernor<K>
+impl<C, K> Clone for RedisGovernor<C, K> {
+    fn clone(&self) -> Self {
+        Self {
+            clock: self.clock.clone(),
+            state: self.state.clone(),
+        }
+    }
+}
+
+impl<C, K> Debug for RedisGovernor<C, K> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} [prefix={}]",
+            std::any::type_name::<Self>(),
+            self.state.prefix
+        )
+    }
+}
+
+impl<C, K> RedisGovernor<C, K>
 where
+    C: redis::ConnectionLike,
     K: Hash + Eq + Clone + Debug,
 {
     /// Create a new [`RedisGovernor`](Self) for an existing Redis connection.
@@ -39,7 +57,7 @@ where
     /// the governor (e.g. different services sharing a Redis instance)
     /// to prevent key collisions. The `prefix` will be cloned onto the heap if it
     /// is not a compile-time static string.
-    pub fn new<I>(conn: redis::Connection, prefix: I) -> Self
+    pub fn new<I>(conn: C, prefix: I) -> Self
     where
         I: Into<Cow<'static, str>>,
     {
@@ -62,7 +80,8 @@ where
     pub fn rate_limiter(
         &self,
         quota: Quota,
-    ) -> RateLimiter<K, state::RedisStateStore<K>, clock::RedisClock, RedisNoOpMiddleware> {
+    ) -> RateLimiter<K, state::RedisStateStore<C, K>, clock::RedisClock<C>, RedisNoOpMiddleware>
+    {
         RateLimiter::new(quota, self.state.clone(), &self.clock)
     }
 }

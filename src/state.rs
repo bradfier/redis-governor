@@ -1,6 +1,5 @@
 use governor::nanos::Nanos;
 use governor::state::StateStore;
-use redis::Connection;
 use siphasher::sip::SipHasher;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -17,19 +16,32 @@ use std::rc::Rc;
 /// store for state values, with separate individual values used
 /// as semaphores to manage lock contention, as Redis cannot directly
 /// use hash entries with it's provided conflict-detection mechanism.
-#[derive(Clone)]
-pub struct RedisStateStore<K> {
-    conn: Rc<RefCell<Connection>>,
-    prefix: Cow<'static, str>,
+pub struct RedisStateStore<C, K> {
+    conn: Rc<RefCell<C>>,
+    pub(crate) prefix: Cow<'static, str>,
     hash_key: String,
     key: PhantomData<K>,
 }
 
-impl<K> RedisStateStore<K> {
-    pub(crate) fn new<I: Into<Cow<'static, str>>>(
-        conn: Rc<RefCell<Connection>>,
-        prefix: I,
-    ) -> Self {
+// Provide a Clone impl that does not require Clone by
+// simply duping the Rc (which the derive will not do because it
+// puts a Clone bound on all params)
+impl<C, K> Clone for RedisStateStore<C, K> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            prefix: self.prefix.clone(),
+            hash_key: self.hash_key.clone(),
+            key: Default::default(),
+        }
+    }
+}
+
+impl<C, K> RedisStateStore<C, K>
+where
+    C: redis::ConnectionLike,
+{
+    pub(crate) fn new<I: Into<Cow<'static, str>>>(conn: Rc<RefCell<C>>, prefix: I) -> Self {
         let prefix = prefix.into();
         Self {
             conn,
@@ -44,7 +56,7 @@ impl<K> RedisStateStore<K> {
     }
 }
 
-impl<K: Hash> RedisStateStore<K> {
+impl<C, K: Hash> RedisStateStore<C, K> {
     fn key_hash(&self, key: &K) -> String {
         let mut hasher = SipHasher::new();
         key.hash(&mut hasher);
@@ -52,7 +64,11 @@ impl<K: Hash> RedisStateStore<K> {
     }
 }
 
-impl<K: Hash + Eq + Clone + Debug> StateStore for RedisStateStore<K> {
+impl<C, K> StateStore for RedisStateStore<C, K>
+where
+    C: redis::ConnectionLike,
+    K: Hash + Eq + Clone + Debug,
+{
     type Key = K;
 
     fn measure_and_replace<T, F, E>(&self, key: &Self::Key, f: F) -> Result<T, E>
