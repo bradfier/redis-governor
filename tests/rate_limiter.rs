@@ -1,11 +1,13 @@
 use test_log::test;
 
 use governor::{Quota, RateLimiter};
-use redis_governor::{RedisNoOpMiddleware, RedisGovernor, state::RedisStateStore, clock::RedisClock};
+use redis_governor::{
+    clock::RedisClock, state::RedisStateStore, RedisGovernor, RedisNoOpMiddleware,
+};
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::num::NonZeroU32;
 use std::time::Duration;
-use std::hash::Hash;
-use std::fmt::Debug;
 
 /// Fixed quota to ensure that test duration variance/timing cannot
 /// cause flakiness.
@@ -18,7 +20,12 @@ fn fixed_quota(limit: u32) -> Quota {
         .allow_burst(NonZeroU32::new(limit).expect("limit must be greater than zero"))
 }
 
-type RedisRateLimiter<K> = RateLimiter<K, RedisStateStore<redis::Connection, K>, RedisClock<redis::Connection>, RedisNoOpMiddleware>;
+type RedisRateLimiter<K> = RateLimiter<
+    K,
+    RedisStateStore<redis::Connection, K>,
+    RedisClock<redis::Connection>,
+    RedisNoOpMiddleware,
+>;
 
 fn should_rate_limit<K: Hash + Debug + Eq + Clone>(limiter: &RedisRateLimiter<K>, key: &K) {
     let _ = limiter
@@ -27,9 +34,7 @@ fn should_rate_limit<K: Hash + Debug + Eq + Clone>(limiter: &RedisRateLimiter<K>
 }
 
 fn should_not_rate_limit<K: Hash + Debug + Eq + Clone>(limiter: &RedisRateLimiter<K>, key: &K) {
-    let _ = limiter
-        .check_key(key)
-        .expect("unexpectedly rate limited");
+    let _ = limiter.check_key(key).expect("unexpectedly rate limited");
 }
 
 #[test]
@@ -52,7 +57,6 @@ fn rate_limiter_works() {
     should_rate_limit(&redis_limiter, &"test");
 }
 
-
 #[test]
 fn rate_limiter_can_recover() {
     const MINUTELY_LIMIT: u32 = 12u32;
@@ -72,8 +76,7 @@ fn rate_limiter_can_recover() {
 
     // Ensure over the limit
     for _ in 0..MINUTELY_LIMIT {
-        let _ = redis_limiter
-            .check_key(&"test");
+        let _ = redis_limiter.check_key(&"test");
     }
 
     should_rate_limit(&redis_limiter, &"test");

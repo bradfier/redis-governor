@@ -40,6 +40,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: recursive
+      - name: Install and start Redis
+        run: sudo sh -c 'apt-get update && apt-get install -y redis && systemctl start redis-server'
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
