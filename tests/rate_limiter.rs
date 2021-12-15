@@ -1,9 +1,11 @@
 use test_log::test;
 
-use governor::Quota;
-use redis_governor::RedisGovernor;
+use governor::{Quota, RateLimiter};
+use redis_governor::{RedisNoOpMiddleware, RedisGovernor, state::RedisStateStore, clock::RedisClock};
 use std::num::NonZeroU32;
 use std::time::Duration;
+use std::hash::Hash;
+use std::fmt::Debug;
 
 /// Fixed quota to ensure that test duration variance/timing cannot
 /// cause flakiness.
@@ -14,6 +16,20 @@ fn fixed_quota(limit: u32) -> Quota {
     Quota::with_period(Duration::from_secs(DAY_IN_SECS))
         .expect("failed to create quota")
         .allow_burst(NonZeroU32::new(limit).expect("limit must be greater than zero"))
+}
+
+type RedisRateLimiter<K> = RateLimiter<K, RedisStateStore<redis::Connection, K>, RedisClock<redis::Connection>, RedisNoOpMiddleware>;
+
+fn should_rate_limit<K: Hash + Debug + Eq + Clone>(limiter: &RedisRateLimiter<K>, key: &K) {
+    let _ = limiter
+        .check_key(key)
+        .expect_err("not rate limited when expected");
+}
+
+fn should_not_rate_limit<K: Hash + Debug + Eq + Clone>(limiter: &RedisRateLimiter<K>, key: &K) {
+    let _ = limiter
+        .check_key(key)
+        .expect("unexpectedly rate limited");
 }
 
 #[test]
@@ -30,14 +46,41 @@ fn rate_limiter_works() {
     let redis_limiter = governor.rate_limiter(quota);
 
     for _ in 0..LIMIT {
-        redis_limiter
-            .check_key(&"test")
-            .expect("unexpectedly rate limited");
+        should_not_rate_limit(&redis_limiter, &"test");
     }
 
-    redis_limiter
-        .check_key(&"test")
-        .expect_err("not rate limited when expected");
+    should_rate_limit(&redis_limiter, &"test");
+}
+
+
+#[test]
+fn rate_limiter_can_recover() {
+    const MINUTELY_LIMIT: u32 = 12u32;
+
+    let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
+    let conn = redis.get_connection().unwrap();
+    let quota = Quota::per_minute(NonZeroU32::new(MINUTELY_LIMIT).unwrap());
+
+    let governor = RedisGovernor::new(conn, "rate-limiter-recovery-test");
+    governor.wipe();
+
+    let redis_limiter = governor.rate_limiter(quota);
+
+    for _ in 0..MINUTELY_LIMIT {
+        should_not_rate_limit(&redis_limiter, &"test");
+    }
+
+    // Ensure over the limit
+    for _ in 0..MINUTELY_LIMIT {
+        let _ = redis_limiter
+            .check_key(&"test");
+    }
+
+    should_rate_limit(&redis_limiter, &"test");
+
+    std::thread::sleep(Duration::from_secs_f32((60 / MINUTELY_LIMIT) as f32));
+
+    should_not_rate_limit(&redis_limiter, &"test");
 }
 
 #[test]
@@ -69,9 +112,7 @@ fn rate_limiter_works_when_contended() {
                     let redis_limiter = governor.rate_limiter(quota);
 
                     for _ in 0..TRIES_PER_THREAD {
-                        redis_limiter
-                            .check_key(&"test")
-                            .expect("unexpectedly rate limited");
+                        should_not_rate_limit(&redis_limiter, &"test");
                     }
                 })
                 .expect("failed to create thread")
@@ -80,10 +121,7 @@ fn rate_limiter_works_when_contended() {
         .collect::<Result<Vec<()>, _>>()
         .expect("failure in testing thread");
 
-    governor
-        .rate_limiter(quota)
-        .check_key(&"test")
-        .expect_err("not rate limited when expected");
+    should_rate_limit(&governor.rate_limiter(quota), &"test");
 }
 
 #[test]
@@ -113,16 +151,13 @@ fn can_maintain_disjoint_rate_limits() {
             std::thread::Builder::new()
                 .name(format!("disjoint-rate-limit-job-{}-thread-{}", job, id))
                 .spawn(move || {
-                    let key_name_ref = key_name.as_str();
                     let conn = redis.get_connection().unwrap();
 
                     let governor = RedisGovernor::new(conn, PREFIX);
                     let redis_limiter = governor.rate_limiter(quota);
 
                     for _ in 0..TRIES_PER_THREAD {
-                        redis_limiter
-                            .check_key(&key_name_ref)
-                            .expect("unexpectedly rate limited");
+                        should_not_rate_limit(&redis_limiter, &key_name.as_str());
                     }
                 })
                 .expect("failed to create thread")
@@ -138,9 +173,6 @@ fn can_maintain_disjoint_rate_limits() {
     for job in 0..JOBS {
         let key_name = format!("test-{}", job);
 
-        governor
-            .rate_limiter(quota)
-            .check_key(&key_name.as_str())
-            .expect_err("not rate limited when expected");
+        should_rate_limit(&governor.rate_limiter(quota), &key_name);
     }
 }

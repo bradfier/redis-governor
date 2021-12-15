@@ -7,12 +7,45 @@ use std::rc::Rc;
 /// Clock source for using Redis as a limiter time base.
 ///
 /// Uses `Rc<RefCell<redis::Connection>>` as `Clock` requires that `Clone` be implemented for the type.
-pub struct RedisClock<C>(pub(crate) Rc<RefCell<C>>);
+pub struct RedisClock<C> {
+    pub(crate) conn: Rc<RefCell<C>>,
+    start_key: String,
+}
 
+// This impl is used because derive places a Clone bound on C,
+// but Clone is satisfied for all Rc<T> regardless of whether
+// T: Clone (and we don't want to force connections to be Clone)
 impl<C> Clone for RedisClock<C> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self {
+            conn: self.conn.clone(),
+            start_key: self.start_key.clone(),
+        }
     }
+}
+
+impl<C> RedisClock<C> {
+    pub(crate) fn new(conn: Rc<RefCell<C>>, prefix: &str) -> Self {
+        Self {
+            conn,
+            start_key: format!("{}:start", prefix),
+        }
+    }
+}
+
+impl<C> RedisClock<C>
+where
+    C: redis::ConnectionLike,
+{
+    fn now_nanos(conn: &mut C) -> u64 {
+        let (secs, micros): (u64, u64) = redis::cmd("TIME")
+            .query(conn)
+            .expect("Failed to retrieve time from Redis");
+
+        secs * 1_000_000_000 + micros * 1_000
+    }
+
+    pub(crate) fn reset_start(&self) {}
 }
 
 impl<C> Clock for RedisClock<C>
@@ -22,11 +55,38 @@ where
     type Instant = RedisInstant;
 
     fn now(&self) -> Self::Instant {
-        let (secs, micros): (u64, u64) = redis::cmd("TIME")
-            .query(&mut *self.0.borrow_mut())
-            .expect("Failed to retrieve time from Redis");
+        RedisInstant(Nanos::new(Self::now_nanos(&mut *self.conn.borrow_mut())))
+    }
 
-        RedisInstant(Nanos::new(secs * 1_000_000_000 + micros * 1_000))
+    fn start(&self) -> Self::Instant {
+        let conn = &mut *self.conn.borrow_mut();
+        redis_check_and_set!(conn, (&self.start_key) => {
+            let start: Option<u64> = redis::Cmd::get(&self.start_key)
+                .query(conn)
+                .expect("Failed to check Redis for key presence");
+
+            if let Some(start) = start {
+                return RedisInstant(Nanos::new(start));
+            }
+
+            let now = Self::now_nanos(conn);
+
+            let response: Option<(u64,)> = redis::pipe()
+                .atomic()
+                .cmd("SET")
+                .arg(&self.start_key)
+                .arg(now)
+                .ignore()
+                .cmd("GET")
+                .arg(&self.start_key)
+                .query(conn)
+                .expect("Failed to set start time");
+
+            match response {
+                None => continue,
+                Some((val,)) => return RedisInstant(Nanos::new(val)),
+            }
+        });
     }
 }
 
@@ -62,8 +122,8 @@ mod tests {
         let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
         let conn = redis.get_connection().unwrap();
 
-        let clock = Rc::new(RefCell::new(conn));
-        let clock = RedisClock(clock);
+        let conn = Rc::new(RefCell::new(conn));
+        let clock = RedisClock::new(conn, &"test");
 
         let instant = clock.now();
         std::thread::sleep(Duration::from_millis(50));

@@ -7,8 +7,33 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::rc::Rc;
 
+pub use governor;
+
 use governor::middleware::NoOpMiddleware;
 use governor::{Quota, RateLimiter};
+
+#[macro_use]
+mod private_macros {
+    macro_rules! redis_check_and_set {
+        ($conn:expr, ($watch_key:expr) => $block:expr) => {
+            loop {
+                // WATCH value field
+                // This will abort the atomic section later if the semaphore key is updated
+                // by another connection.
+                // WATCHes are always cancelled after an EXEC command, so it needs
+                // to be performed every iteration.
+                let _: () = redis::cmd("WATCH")
+                    .arg($watch_key)
+                    .query($conn)
+                    .expect("Failed to watch for key");
+
+                {
+                    $block
+                }
+            }
+        };
+    }
+}
 
 pub mod clock;
 pub mod state;
@@ -61,25 +86,27 @@ where
     where
         I: Into<Cow<'static, str>>,
     {
+        let prefix = prefix.into();
         let conn = Rc::new(RefCell::new(conn));
-        let state = state::RedisStateStore::new(conn.clone(), prefix);
-        let clock = clock::RedisClock(conn);
+        let clock = clock::RedisClock::new(conn.clone(), prefix.as_ref());
+        let state = state::RedisStateStore::new(conn, prefix);
 
-        Self { _clock: clock, state }
+        Self {
+            _clock: clock,
+            state,
+        }
     }
 
     /// Wipe all of the rate limits for this governor.
     pub fn wipe(&self) {
+        self._clock.reset_start();
         self.state.wipe();
     }
 
     /// Get a reference to the stored [`RedisClock`](crate::clock::RedisClock).
     ///
     /// Useful to query the current time for displaying rate limiting information.
-    pub fn clock(
-        &self,
-    ) -> &clock::RedisClock<C>
-    {
+    pub fn clock(&self) -> &clock::RedisClock<C> {
         &self._clock
     }
 

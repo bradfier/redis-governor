@@ -11,7 +11,8 @@ A rate limiter for distributed systems, using Redis as a shared time base and st
 edition = "2018"
 
 [dependencies]
-governor = { git = "ssh://git@github.com/antifuchs/governor.git", branch = "master" }
+governor = { path = "./governor" }
+#governor = { git = "https://github.com/antifuchs/governor", branch = "master" }
 redis = "0.21.0"
 siphasher = "0.3.6"
 log = "0.4"
