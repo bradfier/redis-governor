@@ -1,6 +1,13 @@
 [package]
 name = "redis-governor"
 version = "0.1.0"
+authors = ["Richard Bradfield <bradfier@fstab.me>", "Michael Holmes <michael.holmes@passfort.com>"]
+license = "MIT/Apache-2.0"
+repository = "https://github.com/bradfier/redis-governor"
+homepage = "https://github.com/bradfier/redis-governor"
+description = """
+A rate limiter for distributed systems, using Redis as a shared time base and state store.
+"""
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
