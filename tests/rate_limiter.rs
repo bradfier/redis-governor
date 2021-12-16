@@ -2,7 +2,8 @@ use test_log::test;
 
 use governor::{Quota, RateLimiter};
 use redis_governor::{
-    clock::RedisClock, state::RedisStateStore, RedisGovernor, RedisNoOpMiddleware,
+    clock::RedisClock, state::RedisStateStore, PooledRedisConnection, RedisGovernor,
+    RedisNoOpMiddleware,
 };
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -22,8 +23,8 @@ fn fixed_quota(limit: u32) -> Quota {
 
 type RedisRateLimiter<K> = RateLimiter<
     K,
-    RedisStateStore<redis::Connection, K>,
-    RedisClock<redis::Connection>,
+    RedisStateStore<PooledRedisConnection, K>,
+    RedisClock<PooledRedisConnection>,
     RedisNoOpMiddleware,
 >;
 
@@ -42,10 +43,10 @@ fn rate_limiter_works() {
     const LIMIT: u32 = 5u32;
 
     let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let conn = redis.get_connection().unwrap();
     let quota = fixed_quota(LIMIT);
 
-    let governor = RedisGovernor::new(conn, "basic-rate-limiter-test");
+    let pooled_governor = RedisGovernor::new(redis, "basic-rate-limiter-test");
+    let governor = pooled_governor.instance();
     governor.wipe();
 
     let redis_limiter = governor.rate_limiter(quota);
@@ -62,10 +63,10 @@ fn rate_limiter_can_recover() {
     const MINUTELY_LIMIT: u32 = 12u32;
 
     let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let conn = redis.get_connection().unwrap();
     let quota = Quota::per_minute(NonZeroU32::new(MINUTELY_LIMIT).unwrap());
 
-    let governor = RedisGovernor::new(conn, "rate-limiter-recovery-test");
+    let pooled_governor = RedisGovernor::new(redis, "rate-limiter-recovery-test");
+    let governor = pooled_governor.instance();
     governor.wipe();
 
     let redis_limiter = governor.rate_limiter(quota);
@@ -96,22 +97,20 @@ fn rate_limiter_works_when_contended() {
     // Use fixed quota so spillover is not possible which would cause test flakes
     let quota = fixed_quota(LIMIT);
     let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let conn = redis.get_connection().unwrap();
-    let governor = RedisGovernor::new(conn, PREFIX);
+    let pool = RedisGovernor::new(redis, PREFIX);
+    let governor = pool.instance();
     governor.wipe();
 
     (0..THREADS)
         .map(|id| {
             let quota = quota;
-            let redis = redis.clone();
+            let pool = pool.clone();
             std::thread::Builder::new()
                 .name(format!("concurrent-rate-limit-thread-{}", id))
                 .spawn(move || {
                     // Each thread gets its own limiter conn for better testing
                     // and because the thread is not Send
-                    let conn = redis.get_connection().unwrap();
-
-                    let governor = RedisGovernor::new(conn, PREFIX);
+                    let governor = pool.instance();
                     let redis_limiter = governor.rate_limiter(quota);
 
                     for _ in 0..TRIES_PER_THREAD {
@@ -138,8 +137,8 @@ fn can_maintain_disjoint_rate_limits() {
     // Use fixed quota so spillover is not possible which would cause test flakes
     let quota = fixed_quota(LIMIT);
     let redis = redis::Client::open("redis://127.0.0.1/").unwrap();
-    let conn = redis.get_connection().unwrap();
-    let governor = RedisGovernor::new(conn, PREFIX);
+    let pool = RedisGovernor::new(redis, PREFIX);
+    let governor = pool.instance();
     governor.wipe();
 
     let mut results = vec![];
@@ -149,14 +148,12 @@ fn can_maintain_disjoint_rate_limits() {
 
         results.extend((0..THREADS).map(|id| {
             let quota = quota;
-            let redis = redis.clone();
+            let pool = pool.clone();
             let key_name = key_name.clone();
             std::thread::Builder::new()
                 .name(format!("disjoint-rate-limit-job-{}-thread-{}", job, id))
                 .spawn(move || {
-                    let conn = redis.get_connection().unwrap();
-
-                    let governor = RedisGovernor::new(conn, PREFIX);
+                    let governor = pool.instance();
                     let redis_limiter = governor.rate_limiter(quota);
 
                     for _ in 0..TRIES_PER_THREAD {
@@ -169,13 +166,12 @@ fn can_maintain_disjoint_rate_limits() {
 
     results
         .into_iter()
-        .map(|h| h.join())
-        .collect::<Result<(), _>>()
+        .try_for_each(|h| h.join())
         .expect("failure in testing thread");
 
     for job in 0..JOBS {
         let key_name = format!("test-{}", job);
 
-        should_rate_limit(&governor.rate_limiter(quota), &key_name);
+        should_rate_limit(&governor.rate_limiter(quota), &(key_name.as_str()));
     }
 }

@@ -13,7 +13,8 @@ edition = "2018"
 [dependencies]
 governor = { path = "./governor" }
 #governor = { git = "https://github.com/antifuchs/governor", branch = "master" }
-redis = "0.21.0"
+redis = { version = "0.21.0", features = ["r2d2"] }
+r2d2 = "0.8.9"
 siphasher = "0.3.6"
 log = "0.4"
 

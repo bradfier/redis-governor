@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 
 use std::rc::Rc;
 
@@ -52,7 +53,7 @@ where
     }
 
     pub(crate) fn wipe(&self) {
-        redis::Cmd::del(&self.hash_key).execute(&mut *self.conn.borrow_mut());
+        redis::Cmd::del(&self.hash_key).execute(self.conn.deref().borrow_mut().deref_mut());
     }
 }
 
@@ -152,15 +153,14 @@ where
         // whereas it's O(1) for a Hash.
         let value_key = format!("{}:governor:value:{}", self.prefix, &hash);
 
-        let conn = &mut *self.conn.borrow_mut();
-
         // This loop will effectively attempt to set the Redis key
         // by doing check-and-set attempts until it "wins", similar to
         // reference implementations used in governor.
-        redis_check_and_set!(conn, (&value_key) => {
+        let mut conn = self.conn.deref().borrow_mut();
+        redis_check_and_set!(conn.deref_mut(), (&value_key) => {
             // Obtain previous value from state store.
             let prev: Option<u64> = redis::Cmd::hget(&self.hash_key, &hash)
-                .query(conn)
+                .query(conn.deref_mut())
                 .expect("Failed to check Redis for key presence");
             trace!("Previous value: {:?}", prev);
             let decision = f(prev.map(Into::into));
@@ -177,7 +177,7 @@ where
                         .set(&value_key, new_data)
                         .ignore()
                         .hset(&self.hash_key, &hash, new_data)
-                        .query(conn)
+                        .query(conn.deref_mut())
                         .expect("Failed to run atomic section");
 
                     match response {

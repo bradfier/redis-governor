@@ -1,7 +1,9 @@
 use governor::clock::{Clock, Reference};
 use governor::nanos::Nanos;
 use std::cell::RefCell;
+
 use std::ops::Add;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 /// Clock source for using Redis as a limiter time base.
@@ -55,21 +57,21 @@ where
     type Instant = RedisInstant;
 
     fn now(&self) -> Self::Instant {
-        RedisInstant(Nanos::new(Self::now_nanos(&mut *self.conn.borrow_mut())))
+        RedisInstant(Nanos::new(Self::now_nanos(&mut (*self.conn).borrow_mut())))
     }
 
     fn start(&self) -> Self::Instant {
-        let conn = &mut *self.conn.borrow_mut();
-        redis_check_and_set!(conn, (&self.start_key) => {
+        let mut conn = self.conn.deref().borrow_mut();
+        redis_check_and_set!(conn.deref_mut(), (&self.start_key) => {
             let start: Option<u64> = redis::Cmd::get(&self.start_key)
-                .query(conn)
+                .query(conn.deref_mut())
                 .expect("Failed to check Redis for key presence");
 
             if let Some(start) = start {
                 return RedisInstant(Nanos::new(start));
             }
 
-            let now = Self::now_nanos(conn);
+            let now = Self::now_nanos(conn.deref_mut());
 
             let response: Option<(u64,)> = redis::pipe()
                 .atomic()
@@ -79,7 +81,7 @@ where
                 .ignore()
                 .cmd("GET")
                 .arg(&self.start_key)
-                .query(conn)
+                .query(conn.deref_mut())
                 .expect("Failed to set start time");
 
             match response {
@@ -123,7 +125,7 @@ mod tests {
         let conn = redis.get_connection().unwrap();
 
         let conn = Rc::new(RefCell::new(conn));
-        let clock = RedisClock::new(conn, &"test");
+        let clock = RedisClock::new(conn, "test");
 
         let instant = clock.now();
         std::thread::sleep(Duration::from_millis(50));
